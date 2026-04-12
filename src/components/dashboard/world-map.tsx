@@ -5,22 +5,19 @@ import { useDashboardStore } from "@/stores/dashboard-store";
 import { ALL_COUNTRIES, getCountryByCode } from "@/data/countries";
 import { SeverityBadge } from "@/components/ui/severity-badge";
 import { cn } from "@/lib/utils";
-import {
-  ZoomIn, ZoomOut, RotateCcw, Maximize2, Layers,
-  Crosshair, Globe
-} from "lucide-react";
+import { formatNumber } from "@/lib/utils";
+import { Layers, Globe } from "lucide-react";
 
-// Map projection: Equirectangular (simple, no external dependency)
-function projectPoint(lat: number, lng: number, width: number, height: number, zoom: number, offsetX: number, offsetY: number) {
-  const x = ((lng + 180) / 360) * width * zoom + offsetX;
-  const y = ((90 - lat) / 180) * height * zoom + offsetY;
-  return { x, y };
-}
-
-// Simulated CII scores for map coloring
+// Simulated CII scores
 function getCII(code: string): number {
+  const highCII: Record<string, number> = {
+    UA: 95, PS: 93, SD: 88, MM: 85, SY: 82, SO: 80, YE: 78, AF: 77,
+    CD: 76, HT: 74, LY: 70, ML: 68, BF: 66, NE: 65, IQ: 62, CF: 72,
+    ET: 70, SS: 75, RU: 55, IL: 50, IR: 52, PK: 48, VE: 45, NG: 42,
+  };
+  if (highCII[code]) return highCII[code];
   const seed = code.charCodeAt(0) * 100 + code.charCodeAt(1);
-  return Math.round(((seed * 9301 + 49297) % 233280 / 233280) * 80 + 10);
+  return Math.round(((seed * 9301 + 49297) % 233280 / 233280) * 50 + 5);
 }
 
 function getCIIColor(cii: number): string {
@@ -31,282 +28,338 @@ function getCIIColor(cii: number): string {
   return "#22c55e";
 }
 
-interface TooltipData {
-  country: typeof ALL_COUNTRIES[0];
-  cii: number;
-  x: number;
-  y: number;
-}
+// Conflict zones with pulsing
+const CONFLICT_ZONES = [
+  { lat: 48.3, lng: 35.0, name: "Ukraine", severity: 95 },
+  { lat: 31.5, lng: 34.5, name: "Gaza", severity: 92 },
+  { lat: 15.5, lng: 32.5, name: "Sudan", severity: 88 },
+  { lat: 19.7, lng: 96.2, name: "Myanmar", severity: 82 },
+  { lat: 9.0, lng: 38.7, name: "Ethiopia", severity: 72 },
+  { lat: 14.0, lng: -2.0, name: "Sahel", severity: 75 },
+  { lat: 2.0, lng: 45.3, name: "Somalia", severity: 70 },
+  { lat: -2.5, lng: 28.8, name: "DRC", severity: 78 },
+  { lat: 35.0, lng: 38.0, name: "Syria", severity: 60 },
+  { lat: 15.5, lng: 48.0, name: "Yemen", severity: 68 },
+  { lat: 18.9, lng: -72.3, name: "Haiti", severity: 65 },
+];
+
+// Map tile styles
+const MAP_STYLES = {
+  dark: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+  satellite: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  terrain: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+  streets: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager_labels_under/{z}/{x}/{y}{r}.png",
+};
+
+type MapStyle = keyof typeof MAP_STYLES;
 
 export function WorldMap() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markersRef = useRef<L.LayerGroup | null>(null);
+  const conflictLayerRef = useRef<L.LayerGroup | null>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const [mapStyle, setMapStyle] = useState<MapStyle>("satellite");
+  const [showLayers, setShowLayers] = useState(false);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
+
   const { selectedCountry, setSelectedCountry, setActivePanel, profile, mapLayers } = useDashboardStore();
 
-  const [zoom, setZoom] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [tooltip, setTooltip] = useState<TooltipData | null>(null);
-  const [dimensions, setDimensions] = useState({ width: 800, height: 450 });
-
-  // Conflict zones for pulsing dots
-  const conflictZones = useMemo(() => [
-    { lat: 48.3, lng: 35.0, name: "Ukraine", severity: 95 },
-    { lat: 31.5, lng: 34.5, name: "Gaza", severity: 92 },
-    { lat: 15.5, lng: 32.5, name: "Sudan", severity: 88 },
-    { lat: 19.7, lng: 96.2, name: "Myanmar", severity: 82 },
-    { lat: 9.0, lng: 38.7, name: "Ethiopia", severity: 72 },
-    { lat: 14.0, lng: -2.0, name: "Sahel", severity: 75 },
-    { lat: 2.0, lng: 45.3, name: "Somalia", severity: 70 },
-    { lat: -2.5, lng: 28.8, name: "DRC", severity: 78 },
-    { lat: 35.0, lng: 38.0, name: "Syria", severity: 60 },
-    { lat: 15.5, lng: 48.0, name: "Yemen", severity: 68 },
-    { lat: 18.9, lng: -72.3, name: "Haiti", severity: 65 },
-  ], []);
-
-  // Resize handler
+  // Initialize map
   useEffect(() => {
-    const handleResize = () => {
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        setDimensions({ width: rect.width, height: rect.height });
+    if (!mapContainerRef.current || mapRef.current) return;
+
+    let L: typeof import("leaflet");
+
+    const initMap = async () => {
+      L = await import("leaflet");
+
+      // Fix default marker icons
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (L.Icon.Default.prototype as any)._getIconUrl;
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
+        iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
+        shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+      });
+
+      const map = L.map(mapContainerRef.current!, {
+        center: [30, 20],
+        zoom: 3,
+        minZoom: 2,
+        maxZoom: 18,
+        zoomControl: false,
+        attributionControl: false,
+        worldCopyJump: true,
+      });
+
+      // Satellite tile layer
+      const tileLayer = L.tileLayer(MAP_STYLES.satellite, {
+        maxZoom: 18,
+        attribution: "",
+      }).addTo(map);
+      tileLayerRef.current = tileLayer;
+
+      // Add attribution in corner
+      L.control.attribution({
+        position: "bottomleft",
+        prefix: false,
+      }).addTo(map);
+
+      // Zoom control
+      L.control.zoom({ position: "topright" }).addTo(map);
+
+      // Marker layer
+      const markers = L.layerGroup().addTo(map);
+      markersRef.current = markers;
+
+      // Conflict layer
+      const conflictLayer = L.layerGroup().addTo(map);
+      conflictLayerRef.current = conflictLayer;
+
+      mapRef.current = map;
+      setMapReady(true);
+    };
+
+    initMap();
+
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+        setMapReady(false);
       }
     };
-    handleResize();
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // Draw map
+  // Add country markers
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!mapReady || !markersRef.current) return;
 
-    const { width, height } = dimensions;
-    canvas.width = width * 2; // Retina
-    canvas.height = height * 2;
-    ctx.scale(2, 2);
+    const addMarkers = async () => {
+      const L = await import("leaflet");
+      const markers = markersRef.current!;
+      markers.clearLayers();
 
-    // Background
-    ctx.fillStyle = "#09090b";
-    ctx.fillRect(0, 0, width, height);
+      ALL_COUNTRIES.forEach((country) => {
+        if (!country.lat || !country.lng) return;
 
-    // Grid lines
-    ctx.strokeStyle = "#18181b";
-    ctx.lineWidth = 0.5;
+        const cii = getCII(country.code);
+        const color = getCIIColor(cii);
+        const isFocus = profile.focusCountries.includes(country.code);
+        const isSelected = selectedCountry === country.code;
+        const radius = Math.max(4, Math.min(12, Math.log10(country.population + 1) * 2));
 
-    // Latitude lines
-    for (let lat = -60; lat <= 80; lat += 20) {
-      ctx.beginPath();
-      const start = projectPoint(lat, -180, width, height, zoom, offset.x, offset.y);
-      const end = projectPoint(lat, 180, width, height, zoom, offset.x, offset.y);
-      ctx.moveTo(start.x, start.y);
-      ctx.lineTo(end.x, end.y);
-      ctx.stroke();
-    }
+        const marker = L.circleMarker([country.lat, country.lng], {
+          radius: isSelected ? radius * 2 : isFocus ? radius * 1.5 : radius,
+          fillColor: isSelected ? "#3b82f6" : color,
+          color: isSelected ? "#93c5fd" : isFocus ? "#eab308" : color,
+          weight: isSelected ? 3 : isFocus ? 2 : 1,
+          opacity: 1,
+          fillOpacity: isSelected ? 0.9 : 0.7,
+        });
 
-    // Longitude lines
-    for (let lng = -180; lng <= 180; lng += 30) {
-      ctx.beginPath();
-      const start = projectPoint(90, lng, width, height, zoom, offset.x, offset.y);
-      const end = projectPoint(-90, lng, width, height, zoom, offset.x, offset.y);
-      ctx.moveTo(start.x, start.y);
-      ctx.lineTo(end.x, end.y);
-      ctx.stroke();
-    }
+        // Tooltip
+        const tooltipContent = `
+          <div style="font-family: ui-monospace, monospace; min-width: 180px;">
+            <div style="font-size: 16px; margin-bottom: 4px;">${country.flagEmoji} <strong>${country.name}</strong></div>
+            <div style="font-size: 11px; color: #a1a1aa;">${country.nameSv} · ${country.region}</div>
+            <hr style="border-color: #333; margin: 6px 0;" />
+            <div style="display: flex; justify-content: space-between; font-size: 11px;">
+              <span style="color: #a1a1aa;">Capital:</span>
+              <span style="color: #e4e4e7;">${country.capital}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px;">
+              <span style="color: #a1a1aa;">Population:</span>
+              <span style="color: #e4e4e7;">${formatNumber(country.population)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px;">
+              <span style="color: #a1a1aa;">CII Score:</span>
+              <span style="color: ${color}; font-weight: bold;">${cii}</span>
+            </div>
+            ${isFocus ? '<div style="margin-top: 4px; font-size: 10px; color: #eab308;">⭐ Focus Country</div>' : ""}
+          </div>
+        `;
 
-    // Draw country dots
-    ALL_COUNTRIES.forEach((country) => {
-      const { x, y } = projectPoint(country.lat, country.lng, width, height, zoom, offset.x, offset.y);
+        marker.bindTooltip(tooltipContent, {
+          className: "custom-tooltip",
+          direction: "top",
+          offset: [0, -8],
+        });
 
-      // Skip if off screen
-      if (x < -20 || x > width + 20 || y < -20 || y > height + 20) return;
+        // Click handler
+        marker.on("click", () => {
+          setSelectedCountry(country.code);
+          setActivePanel("overview");
+        });
 
-      const cii = getCII(country.code);
-      const isSelected = selectedCountry === country.code;
-      const isFocus = profile.focusCountries.includes(country.code);
-
-      // Country dot
-      const baseRadius = Math.max(2, Math.min(6, Math.log10(country.population + 1) * 1.2)) * zoom;
-      const radius = isSelected ? baseRadius * 1.8 : isFocus ? baseRadius * 1.3 : baseRadius;
-
-      // Glow effect for high CII
-      if (cii >= 60) {
-        const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius * 3);
-        gradient.addColorStop(0, getCIIColor(cii) + "40");
-        gradient.addColorStop(1, getCIIColor(cii) + "00");
-        ctx.fillStyle = gradient;
-        ctx.beginPath();
-        ctx.arc(x, y, radius * 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Selection ring
-      if (isSelected) {
-        ctx.strokeStyle = "#3b82f6";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(x, y, radius + 4, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      // Focus ring
-      if (isFocus && !isSelected) {
-        ctx.strokeStyle = "#eab30880";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(x, y, radius + 3, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      // Main dot
-      ctx.fillStyle = isSelected ? "#3b82f6" : getCIIColor(cii);
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Label for large/selected/focus countries
-      if ((zoom > 1.5 || isSelected || isFocus) && (country.population > 30000000 || isSelected || isFocus)) {
-        ctx.fillStyle = isSelected ? "#93c5fd" : "#71717a";
-        ctx.font = `${isSelected ? "bold " : ""}${Math.max(8, 10 * zoom)}px ui-monospace, monospace`;
-        ctx.textAlign = "center";
-        ctx.fillText(country.code, x, y - radius - 4);
-      }
-    });
-
-    // Draw conflict zones (pulsing)
-    if (mapLayers.conflicts) {
-      const time = Date.now() / 1000;
-      conflictZones.forEach((zone) => {
-        const { x, y } = projectPoint(zone.lat, zone.lng, width, height, zoom, offset.x, offset.y);
-        if (x < -20 || x > width + 20 || y < -20 || y > height + 20) return;
-
-        const pulseRadius = (8 + Math.sin(time * 2) * 4) * zoom;
-        const gradient = ctx.createRadialGradient(x, y, 0, x, y, pulseRadius);
-        gradient.addColorStop(0, "#ef444480");
-        gradient.addColorStop(0.5, "#ef444430");
-        gradient.addColorStop(1, "#ef444400");
-        ctx.fillStyle = gradient;
-        ctx.beginPath();
-        ctx.arc(x, y, pulseRadius, 0, Math.PI * 2);
-        ctx.fill();
+        markers.addLayer(marker);
       });
-    }
-
-  }, [dimensions, zoom, offset, selectedCountry, profile.focusCountries, mapLayers, conflictZones]);
-
-  // Animation loop for conflict pulses
-  useEffect(() => {
-    let animFrame: number;
-    const animate = () => {
-      // Trigger re-render for pulse animation
-      const canvas = canvasRef.current;
-      if (canvas) {
-        canvas.dispatchEvent(new Event("redraw"));
-      }
-      animFrame = requestAnimationFrame(animate);
     };
-    if (mapLayers.conflicts) {
-      animFrame = requestAnimationFrame(animate);
-    }
-    return () => cancelAnimationFrame(animFrame);
-  }, [mapLayers.conflicts]);
 
-  // Mouse handlers
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    setIsDragging(true);
-    setDragStart({ x: e.clientX - offset.x, y: e.clientY - offset.y });
-  }, [offset]);
+    addMarkers();
+  }, [mapReady, selectedCountry, profile.focusCountries, setSelectedCountry, setActivePanel]);
 
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    const { width, height } = dimensions;
+  // Add conflict zones
+  useEffect(() => {
+    if (!mapReady || !conflictLayerRef.current) return;
 
-    if (isDragging) {
-      setOffset({
-        x: e.clientX - dragStart.x,
-        y: e.clientY - dragStart.y,
+    const addConflicts = async () => {
+      const L = await import("leaflet");
+      const layer = conflictLayerRef.current!;
+      layer.clearLayers();
+
+      if (!mapLayers.conflicts) return;
+
+      CONFLICT_ZONES.forEach((zone) => {
+        // Outer pulse ring
+        const pulseOuter = L.circleMarker([zone.lat, zone.lng], {
+          radius: 20,
+          fillColor: "#ef4444",
+          color: "#ef4444",
+          weight: 1,
+          opacity: 0.3,
+          fillOpacity: 0.1,
+          className: "conflict-pulse",
+        });
+
+        // Inner marker
+        const inner = L.circleMarker([zone.lat, zone.lng], {
+          radius: 6,
+          fillColor: "#ef4444",
+          color: "#fca5a5",
+          weight: 2,
+          opacity: 0.9,
+          fillOpacity: 0.8,
+        });
+
+        inner.bindTooltip(
+          `<div style="font-family: monospace; font-size: 12px;">
+            <strong style="color: #ef4444;">⚠ ${zone.name}</strong><br/>
+            <span style="color: #a1a1aa;">Severity: </span>
+            <span style="color: #ef4444; font-weight: bold;">${zone.severity}</span>
+          </div>`,
+          { className: "custom-tooltip", direction: "top" }
+        );
+
+        layer.addLayer(pulseOuter);
+        layer.addLayer(inner);
       });
-      return;
+    };
+
+    addConflicts();
+  }, [mapReady, mapLayers.conflicts]);
+
+  // Fly to selected country
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || !selectedCountry) return;
+    const country = getCountryByCode(selectedCountry);
+    if (country) {
+      mapRef.current.flyTo([country.lat, country.lng], 6, { duration: 1.5 });
     }
+  }, [mapReady, selectedCountry]);
 
-    // Find closest country for tooltip
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+  // Change tile layer
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || !tileLayerRef.current) return;
 
-    let closest: TooltipData | null = null;
-    let minDist = 20;
+    const changeTiles = async () => {
+      const L = await import("leaflet");
+      tileLayerRef.current!.remove();
+      const newLayer = L.tileLayer(MAP_STYLES[mapStyle], {
+        maxZoom: 18,
+        attribution: "",
+      }).addTo(mapRef.current!);
+      tileLayerRef.current = newLayer;
+    };
 
-    ALL_COUNTRIES.forEach((country) => {
-      const { x, y } = projectPoint(country.lat, country.lng, width, height, zoom, offset.x, offset.y);
-      const dist = Math.sqrt((mouseX - x) ** 2 + (mouseY - y) ** 2);
-      if (dist < minDist) {
-        minDist = dist;
-        closest = { country, cii: getCII(country.code), x: mouseX, y: mouseY };
-      }
-    });
-
-    setTooltip(closest);
-  }, [isDragging, dragStart, dimensions, zoom, offset]);
-
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
-
-  const handleClick = useCallback((e: React.MouseEvent) => {
-    if (tooltip) {
-      setSelectedCountry(tooltip.country.code);
-      setActivePanel("overview");
-    }
-  }, [tooltip, setSelectedCountry, setActivePanel]);
-
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.1 : 0.1;
-    setZoom((z) => Math.max(0.5, Math.min(5, z + delta)));
-  }, []);
-
-  const resetView = () => {
-    setZoom(1);
-    setOffset({ x: 0, y: 0 });
-  };
+    changeTiles();
+  }, [mapReady, mapStyle]);
 
   return (
-    <div className="relative flex flex-col h-full bg-zinc-950" ref={containerRef}>
-      {/* Map controls */}
-      <div className="absolute top-3 right-3 z-10 flex flex-col gap-1">
-        <button
-          onClick={() => setZoom((z) => Math.min(5, z + 0.3))}
-          className="p-2 bg-zinc-900/90 border border-zinc-700 rounded-lg text-zinc-400 hover:text-white transition-colors"
-        >
-          <ZoomIn size={14} />
-        </button>
-        <button
-          onClick={() => setZoom((z) => Math.max(0.5, z - 0.3))}
-          className="p-2 bg-zinc-900/90 border border-zinc-700 rounded-lg text-zinc-400 hover:text-white transition-colors"
-        >
-          <ZoomOut size={14} />
-        </button>
-        <button
-          onClick={resetView}
-          className="p-2 bg-zinc-900/90 border border-zinc-700 rounded-lg text-zinc-400 hover:text-white transition-colors"
-        >
-          <RotateCcw size={14} />
-        </button>
-      </div>
+    <div className="relative flex flex-col h-full bg-zinc-950">
+      {/* Leaflet CSS */}
+      <link
+        rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css"
+      />
 
-      {/* Zoom indicator */}
-      <div className="absolute bottom-3 left-3 z-10 px-2 py-1 bg-zinc-900/90 border border-zinc-800 rounded text-[10px] font-mono text-zinc-500">
-        {(zoom * 100).toFixed(0)}% · {ALL_COUNTRIES.length} entities
+      {/* Custom tooltip & pulse styles */}
+      <style>{`
+        .custom-tooltip {
+          background: #18181b !important;
+          border: 1px solid #3f3f46 !important;
+          border-radius: 8px !important;
+          padding: 8px 12px !important;
+          box-shadow: 0 10px 25px rgba(0,0,0,0.5) !important;
+          color: #e4e4e7 !important;
+        }
+        .custom-tooltip::before {
+          border-top-color: #3f3f46 !important;
+        }
+        .leaflet-control-zoom a {
+          background: #18181b !important;
+          color: #a1a1aa !important;
+          border-color: #3f3f46 !important;
+        }
+        .leaflet-control-zoom a:hover {
+          background: #27272a !important;
+          color: #fff !important;
+        }
+        @keyframes conflict-pulse {
+          0% { transform: scale(1); opacity: 0.4; }
+          50% { transform: scale(1.8); opacity: 0.1; }
+          100% { transform: scale(1); opacity: 0.4; }
+        }
+        .conflict-pulse {
+          animation: conflict-pulse 2s ease-in-out infinite;
+          transform-origin: center;
+        }
+        .leaflet-container {
+          background: #09090b !important;
+        }
+      `}</style>
+
+      {/* Map container */}
+      <div ref={mapContainerRef} className="flex-1 w-full" style={{ minHeight: "400px" }} />
+
+      {/* Map style switcher */}
+      <div className="absolute top-3 left-3 z-[1000]">
+        <button
+          onClick={() => setShowLayers(!showLayers)}
+          className="p-2 bg-zinc-900/90 border border-zinc-700 rounded-lg text-zinc-400 hover:text-white transition-colors backdrop-blur"
+        >
+          <Layers size={16} />
+        </button>
+        {showLayers && (
+          <div className="absolute top-10 left-0 bg-zinc-900/95 border border-zinc-700 rounded-lg p-2 backdrop-blur shadow-xl min-w-[140px]">
+            {(Object.keys(MAP_STYLES) as MapStyle[]).map((style) => (
+              <button
+                key={style}
+                onClick={() => {
+                  setMapStyle(style);
+                  setShowLayers(false);
+                }}
+                className={cn(
+                  "w-full text-left px-3 py-1.5 rounded text-xs transition-colors",
+                  mapStyle === style
+                    ? "bg-blue-500/20 text-blue-400"
+                    : "text-zinc-400 hover:text-white hover:bg-zinc-800"
+                )}
+              >
+                {style === "satellite" ? "🛰️ Satellite" :
+                 style === "dark" ? "🌑 Dark" :
+                 style === "terrain" ? "🏔️ Terrain" :
+                 "🗺️ Streets"}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Legend */}
-      <div className="absolute bottom-3 right-3 z-10 flex items-center gap-2 px-3 py-1.5 bg-zinc-900/90 border border-zinc-800 rounded-lg">
-        <span className="text-[9px] text-zinc-600 font-mono">CII:</span>
+      <div className="absolute bottom-3 right-3 z-[1000] flex items-center gap-2 px-3 py-1.5 bg-zinc-900/90 border border-zinc-800 rounded-lg backdrop-blur">
+        <span className="text-[9px] text-zinc-500 font-mono">CII:</span>
         {[
           { label: "Stable", color: "#22c55e" },
           { label: "Low", color: "#3b82f6" },
@@ -316,42 +369,16 @@ export function WorldMap() {
         ].map((item) => (
           <div key={item.label} className="flex items-center gap-1">
             <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }} />
-            <span className="text-[9px] text-zinc-500">{item.label}</span>
+            <span className="text-[9px] text-zinc-400">{item.label}</span>
           </div>
         ))}
       </div>
 
-      {/* Canvas */}
-      <canvas
-        ref={canvasRef}
-        className={cn("flex-1 cursor-grab", isDragging && "cursor-grabbing")}
-        style={{ width: "100%", height: "100%" }}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        onClick={handleClick}
-        onWheel={handleWheel}
-      />
-
-      {/* Tooltip */}
-      {tooltip && !isDragging && (
-        <div
-          className="absolute z-20 pointer-events-none"
-          style={{ left: tooltip.x + 15, top: tooltip.y - 10 }}
-        >
-          <div className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 shadow-xl">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-lg">{tooltip.country.flagEmoji}</span>
-              <span className="text-sm font-bold text-white">{tooltip.country.name}</span>
-            </div>
-            <div className="flex items-center gap-3 text-[10px] text-zinc-400">
-              <span>{tooltip.country.capital}</span>
-              <SeverityBadge severity={tooltip.cii} size="sm" />
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Country count */}
+      <div className="absolute bottom-3 left-3 z-[1000] px-2 py-1 bg-zinc-900/90 border border-zinc-800 rounded text-[10px] font-mono text-zinc-500 backdrop-blur">
+        <Globe size={10} className="inline mr-1" />
+        {ALL_COUNTRIES.length} countries · Click to explore
+      </div>
     </div>
   );
 }
