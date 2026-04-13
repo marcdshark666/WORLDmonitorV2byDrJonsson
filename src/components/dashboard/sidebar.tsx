@@ -7,7 +7,7 @@ import {
   Globe, Map, Newspaper, Shield, TrendingUp, Activity,
   Heart, Cloud, Zap, AlertTriangle, Search, ChevronDown,
   ChevronRight, Star, Settings, Bell, Menu, X, Flame,
-  Anchor, Plane, Skull, Users, Scale, Radio
+  Anchor, Plane, Skull, Users, Scale, Radio, Tv
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +29,12 @@ const NAV_SECTIONS = [
     label: "Conflicts",
     icon: Flame,
     description: "Active conflicts & wars",
+  },
+  {
+    id: "live-tv",
+    label: "Live TV",
+    icon: Tv,
+    description: "Watch live news channels",
   },
   {
     id: "military",

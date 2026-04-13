@@ -7,6 +7,7 @@ import { OverviewPanel } from "./overview-panel";
 import { NewsPanel } from "./news-panel";
 import { CountryDetail } from "./country-detail";
 import { ConflictsPanel } from "./conflicts-panel";
+import { TVPanel } from "./tv-panel";
 import { SettingsPanel } from "./settings-panel";
 import { WorldMap } from "./world-map";
 import { cn } from "@/lib/utils";
@@ -19,6 +20,8 @@ function PanelContent({ panel }: { panel: string }) {
       return <NewsPanel />;
     case "conflicts":
       return <ConflictsPanel />;
+    case "live-tv":
+      return <TVPanel />;
     case "settings":
       return <SettingsPanel />;
     case "military":
