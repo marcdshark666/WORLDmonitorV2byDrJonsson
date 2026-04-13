@@ -9,6 +9,7 @@ import {
   ExternalLink, Clock, TrendingUp, AlertTriangle, Eye
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { InfoTip } from "@/components/ui/info-tip";
 
 interface ConflictData {
   id: string;
@@ -314,7 +315,7 @@ export function ConflictsPanel() {
                     <div className="flex items-center gap-3 mt-1 text-[10px] text-zinc-500">
                       <span>{flags} {conflict.countries.join(", ")}</span>
                       <span>•</span>
-                      <span>{conflict.type}</span>
+                      <span className="inline-flex items-center">{conflict.type}<InfoTip term={conflict.type.split(" / ")[0]} iconSize={9} /></span>
                       <span>•</span>
                       <span>Since {conflict.startDate.slice(0, 4)}</span>
                     </div>
@@ -353,11 +354,20 @@ export function ConflictsPanel() {
                   <div>
                     <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Parties Involved</div>
                     <div className="flex flex-wrap gap-1">
-                      {conflict.parties.map((party) => (
-                        <span key={party} className="px-2 py-0.5 bg-zinc-800 rounded text-[10px] text-zinc-400">
-                          {party}
-                        </span>
-                      ))}
+                      {conflict.parties.map((party) => {
+                        // Extract the main acronym from party name for glossary lookup
+                        const acronymMatch = party.match(/^([A-Z]{2,})/);
+                        const acronym = acronymMatch ? acronymMatch[1] : null;
+                        // Also check for known terms in the full party name
+                        const knownTerms = ["NATO", "IDF", "Hamas", "SAF", "RSF", "NUG", "PDF", "JNIM", "ISGS", "M23", "ADF", "MONUSCO", "FARDC", "FDLR", "ATMIS", "MSS", "ELN", "FARC", "EMC", "SDF", "YPG", "HTS", "Houthis", "Wagner Group", "Al-Shabaab"];
+                        const matchedTerm = knownTerms.find(t => party.includes(t));
+                        return (
+                          <span key={party} className="inline-flex items-center gap-0 px-2 py-0.5 bg-zinc-800 rounded text-[10px] text-zinc-400">
+                            {party}
+                            {matchedTerm && <InfoTip term={matchedTerm} iconSize={9} />}
+                          </span>
+                        );
+                      })}
                     </div>
                   </div>
 

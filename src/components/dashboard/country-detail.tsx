@@ -13,6 +13,7 @@ import {
   Newspaper, TrendingUp, ArrowLeft, Clock, Loader2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { InfoTip, InfoTerm } from "@/components/ui/info-tip";
 
 // Simulated metrics — in production these come from APIs
 function getSimulatedMetrics(code: string) {
@@ -39,8 +40,8 @@ function getSimulatedMetrics(code: string) {
 interface MetricCardProps {
   icon: React.ReactNode;
   label: string;
-  value: string | number;
-  subtext?: string;
+  value: React.ReactNode;
+  subtext?: React.ReactNode;
   color?: string;
 }
 
@@ -129,7 +130,7 @@ export function CountryDetail() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <SeverityBadge severity={metrics.ciiScore} size="lg" />
+            <SeverityBadge severity={metrics.ciiScore} size="lg" /><InfoTip term="CII" />
             <button
               onClick={toggleFocus}
               className={cn(
@@ -175,7 +176,7 @@ export function CountryDetail() {
           <MetricCard
             icon={<TrendingUp size={14} />}
             label="GDP/Capita"
-            value={`$${formatNumber(metrics.gdpPerCapita)}`}
+            value={<><span>${formatNumber(metrics.gdpPerCapita)}</span><InfoTip term="GDP/Capita" /></>}
             subtext={`Inflation: ${metrics.inflation}%`}
           />
           <MetricCard
@@ -186,7 +187,7 @@ export function CountryDetail() {
           <MetricCard
             icon={<Building2 size={14} />}
             label="Democracy"
-            value={metrics.democracyIndex}
+            value={<><span>{metrics.democracyIndex}</span><InfoTip term="Democracy Index" /></>}
             subtext="out of 10"
             color={metrics.democracyIndex > 6 ? "text-green-400" : metrics.democracyIndex > 4 ? "text-yellow-400" : "text-red-400"}
           />
@@ -211,18 +212,18 @@ export function CountryDetail() {
           <MetricCard
             icon={<TreePine size={14} />}
             label="CO2/Capita"
-            value={`${metrics.co2PerCapita}t`}
+            value={<><span>{metrics.co2PerCapita}t</span><InfoTip term="CO2/Capita" /></>}
           />
           <MetricCard
             icon={<Globe size={14} />}
             label="HDI"
-            value={metrics.hdi}
+            value={<><span>{metrics.hdi}</span><InfoTip term="HDI" /></>}
             color={metrics.hdi > 0.7 ? "text-green-400" : metrics.hdi > 0.55 ? "text-yellow-400" : "text-red-400"}
           />
           <MetricCard
             icon={<Newspaper size={14} />}
             label="Press Freedom"
-            value={metrics.pressFreedom}
+            value={<><span>{metrics.pressFreedom}</span><InfoTip term="Press Freedom" /></>}
             subtext="out of 100"
           />
         </div>

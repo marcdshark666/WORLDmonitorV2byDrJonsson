@@ -12,6 +12,7 @@ import {
   ArrowRight, ChevronRight, Radio, Eye
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { InfoTip, InfoTerm } from "@/components/ui/info-tip";
 
 // Simulated global stats
 const GLOBAL_STATS = {
@@ -62,7 +63,7 @@ interface StatCardProps {
   label: string;
   value: string | number;
   color: string;
-  subtext?: string;
+  subtext?: React.ReactNode;
 }
 
 function StatCard({ icon, label, value, color, subtext }: StatCardProps) {
@@ -139,7 +140,7 @@ export function OverviewPanel() {
           label="Seismic Events"
           value={GLOBAL_STATS.earthquakesToday}
           color="bg-yellow-500/10"
-          subtext="last 24h (M4.5+)"
+          subtext={<>last 24h (<InfoTerm term="M4.5+" />)</>}
         />
       </div>
 
@@ -203,7 +204,7 @@ export function OverviewPanel() {
               <Activity size={16} className="text-orange-400" />
               <h3 className="text-sm font-bold text-white">Instability Hotspots</h3>
             </div>
-            <span className="text-[10px] text-zinc-600 font-mono">CII Score</span>
+            <span className="text-[10px] text-zinc-600 font-mono"><InfoTerm term="CII" label="CII Score" /></span>
           </div>
           <div className="divide-y divide-zinc-800/50">
             {GLOBAL_HOTSPOTS.map((hotspot) => {

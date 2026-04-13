@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState, useEffect } from "react";
+import { InfoTip, InfoTerm } from "@/components/ui/info-tip";
 
 function LiveClock() {
   const [time, setTime] = useState(new Date());
@@ -20,7 +21,7 @@ function LiveClock() {
   return (
     <div className="flex items-center gap-3 text-xs font-mono text-zinc-400">
       <div className="hidden sm:flex items-center gap-1.5">
-        <span className="text-zinc-600">UTC</span>
+        <span className="text-zinc-600"><InfoTerm term="UTC" label="UTC" /></span>
         <span className="text-zinc-300">
           {time.toLocaleTimeString("en-GB", { timeZone: "UTC", hour: "2-digit", minute: "2-digit", second: "2-digit" })}
         </span>
